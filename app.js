@@ -209,47 +209,47 @@
     await Promise.allSettled(fetchPromises);
   }
 
-  // Update a Category with Real Live Polymarket Events
+  // Update a Category with Real Live Polymarket Events (Preserves Bet-News Linkage)
   function updateCategoryWithLiveEvents(categoryKey, events) {
     if (!state.db || !state.db[categoryKey]) return;
 
-    const tfList = state.db[categoryKey].day || [];
+    ["day", "week", "month"].forEach((tf) => {
+      const tfList = state.db[categoryKey][tf] || [];
 
-    events.slice(0, 10).forEach((ev, idx) => {
-      const primaryMarket = (ev.markets && ev.markets[0]) || {};
-      const title = ev.title || primaryMarket.question || (tfList[idx] && tfList[idx].title);
-      const slug = ev.slug || primaryMarket.slug || "";
-      const url = slug ? `https://polymarket.com/event/${slug}` : "https://polymarket.com";
+      events.forEach((ev) => {
+        const primaryMarket = (ev.markets && ev.markets[0]) || {};
+        const slug = ev.slug || primaryMarket.slug || "";
+        if (!slug) return;
 
-      // Parse outcome prices
-      let liveYes = 0.5;
-      if (primaryMarket.outcomePrices) {
-        try {
-          const pList = typeof primaryMarket.outcomePrices === "string" ? JSON.parse(primaryMarket.outcomePrices) : primaryMarket.outcomePrices;
-          liveYes = parseFloat(pList[0]) || 0.5;
-        } catch (e) {
-          liveYes = 0.5;
+        // Match existing market by slug to ensure news catalyst always matches the bet
+        const targetMarket = tfList.find((m) => m.slug === slug);
+        if (!targetMarket) return;
+
+        // Parse outcome prices
+        let liveYes = 0.5;
+        if (primaryMarket.outcomePrices) {
+          try {
+            const pList = typeof primaryMarket.outcomePrices === "string" ? JSON.parse(primaryMarket.outcomePrices) : primaryMarket.outcomePrices;
+            liveYes = parseFloat(pList[0]) || 0.5;
+          } catch (e) {
+            liveYes = 0.5;
+          }
         }
-      }
-      liveYes = Math.max(0.01, min(0.99, Math.round(liveYes * 100) / 100));
-      const liveNo = Math.round((1 - liveYes) * 100) / 100;
+        liveYes = Math.max(0.01, min(0.99, Math.round(liveYes * 100) / 100));
+        const liveNo = Math.round((1 - liveYes) * 100) / 100;
 
-      // Volume & Liquidity
-      const volNum = parseFloat(ev.volume24hr || ev.volume || primaryMarket.volume || 15000000);
-      const volStr = volNum >= 1000000 ? `$${(volNum / 1000000).toFixed(1)}M` : `$${(volNum / 1000).toFixed(0)}K`;
+        // Volume & Liquidity
+        const volNum = parseFloat(ev.volume24hr || ev.volume || primaryMarket.volume || targetMarket.volumeRaw || 15000000);
+        const volStr = volNum >= 1000000 ? `$${(volNum / 1000000).toFixed(1)}M` : `$${(volNum / 1000).toFixed(0)}K`;
 
-      if (tfList[idx]) {
-        tfList[idx].title = title;
-        tfList[idx].slug = slug;
-        tfList[idx].url = url;
-        tfList[idx].volume = volStr;
-        tfList[idx].outcomes = [
+        targetMarket.volume = volStr;
+        targetMarket.outcomes = [
           { name: "YES", price: liveYes, pct: Math.round(liveYes * 100) },
           { name: "NO", price: liveNo, pct: Math.round(liveNo * 100) }
         ];
 
-        // Recalculate recommendation
-        const adv = tfList[idx].hedgeFundAdvisory;
+        // Recalculate recommendation targets while keeping matched news catalyst intact
+        const adv = targetMarket.hedgeFundAdvisory;
         if (adv) {
           if (liveYes <= 0.65) {
             adv.recommendation = "BET YES";
@@ -265,7 +265,7 @@
             adv.stopLoss = `$${Math.max(0.1, liveNo - 0.12).toFixed(2)}`;
           }
         }
-      }
+      });
     });
   }
 
